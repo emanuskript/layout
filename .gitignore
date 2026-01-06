@@ -33,3 +33,15 @@ __pycache__/
 # OS files
 .DS_Store
 ._*
+
+# Image files (binary files not allowed in HF Spaces)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+
+# Excel files (binary)
+*.xlsx
+*.xls

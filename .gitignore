@@ -1,0 +1,35 @@
+# CVAT export data
+compare/data/cvat_project_7_export/*
+compare/data/cvat_project_7_export/.DS_Store
+
+# Visualization outputs
+visualization_output/*
+
+# DuckDNS config
+duckdns/*
+
+# Annika data
+compare/data/Annika 2 (2024)/*
+
+# Gradio cache
+.gradio/*
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Log files
+*.log
+
+# Model files (if too large, uncomment to exclude)
+# *.pt
+
+# Temporary files
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+._*

@@ -2,6 +2,10 @@
 compare/data/cvat_project_7_export/*
 compare/data/cvat_project_7_export/.DS_Store
 
+!best_catmus.pt
+!best_emanuskript_segmentation.pt
+!best_zone_detection.pt
+
 # Visualization outputs
 visualization_output/*
 

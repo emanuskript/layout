@@ -7,22 +7,234 @@ import zipfile
 import os
 import tempfile
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
+import sqlite3
+import hashlib
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 
 matplotlib.use("Agg")  # Use non-interactive backend
 
-from utils.image_batch_classes import coco_class_mapping
-from test_combined_models import run_model_predictions, combine_and_filter_predictions
+# =====================================================================
+# MULTIPROCESSING SETUP - Must be before any Gradio code
+# =====================================================================
+# Set spawn method for safe multiprocessing from threads
+try:
+    mp.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass  # Already set
+
+from utils.image_batch_classes import coco_class_mapping, ImageBatch
+from test_combined_models import combine_and_filter_predictions
+
+# Script directory for model paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Model paths (resolved at module level)
+MODEL_PATHS = {
+    'emanuskript': os.path.join(SCRIPT_DIR, "best_emanuskript_segmentation.pt"),
+    'catmus': os.path.join(SCRIPT_DIR, "best_catmus.pt"),
+    'zone': os.path.join(SCRIPT_DIR, "best_zone_detection.pt"),
+}
+
+# Model-specific classes to filter
+MODEL_CLASSES = {
+    'emanuskript': [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,20],
+    'catmus': [1, 7],  # DefaultLine and InterlinearLine
+    'zone': None,  # All classes
+}
+
+# Global dict to cache models in worker processes
+_worker_models = {}
+
+
+def _worker_init():
+    """Initialize worker process - models loaded lazily on first use."""
+    global _worker_models
+    _worker_models = {}
+
+
+def _run_single_model(args):
+    """
+    Run a single YOLO model prediction in worker process.
+    Models are cached per-process to avoid reloading.
+    """
+    global _worker_models
+    model_name, model_path, image_path, output_dir, classes = args
+    
+    # Lazy load model (cached per worker process)
+    if model_name not in _worker_models:
+        from ultralytics import YOLO
+        _worker_models[model_name] = YOLO(model_path)
+    
+    model = _worker_models[model_name]
+    
+    # Create output directory
+    model_dir = os.path.join(output_dir, model_name)
+    os.makedirs(model_dir, exist_ok=True)
+    
+    # Run prediction
+    predict_kwargs = {
+        'device': 'cpu',
+        'iou': 0.3,
+        'augment': False,
+        'stream': False,
+    }
+    if classes is not None:
+        predict_kwargs['classes'] = classes
+    
+    results = model.predict(image_path, **predict_kwargs)
+    
+    # Save results to JSON
+    image_id = Path(image_path).stem
+    json_path = os.path.join(model_dir, f"{image_id}.json")
+    with open(json_path, 'w') as f:
+        f.write(results[0].to_json())
+    
+    return model_name, model_dir
+
+
+# Create process pool at module level (before Gradio starts)
+# This avoids the hang when spawning from Gradio's threads
+_model_pool = None
+
+
+def _get_model_pool():
+    """Get or create the model pool (lazy initialization)."""
+    global _model_pool
+    if _model_pool is None:
+        _model_pool = ProcessPoolExecutor(
+            max_workers=3,
+            initializer=_worker_init,
+        )
+    return _model_pool
+
+
+def run_models_parallel(image_path: str, output_dir: str) -> Dict[str, str]:
+    """
+    Run all 3 YOLO models in parallel using pre-initialized process pool.
+    Returns dict of {model_name: labels_folder_path}.
+    """
+    pool = _get_model_pool()
+    
+    # Prepare args for each model
+    model_args = [
+        ('emanuskript', MODEL_PATHS['emanuskript'], image_path, output_dir, MODEL_CLASSES['emanuskript']),
+        ('catmus', MODEL_PATHS['catmus'], image_path, output_dir, MODEL_CLASSES['catmus']),
+        ('zone', MODEL_PATHS['zone'], image_path, output_dir, MODEL_CLASSES['zone']),
+    ]
+    
+    # Submit all jobs
+    futures = {pool.submit(_run_single_model, args): args[0] for args in model_args}
+    
+    # Collect results
+    results = {}
+    for future in as_completed(futures):
+        model_name = futures[future]
+        try:
+            name, dir_path = future.result(timeout=300)  # 5 min timeout per model
+            results[name] = dir_path
+            print(f"  ✓ {model_name} model completed", flush=True)
+        except Exception as e:
+            print(f"  ✗ {model_name} model failed: {e}", flush=True)
+            raise
+    
+    return results
+
+# =====================================================================
+# ANALYTICS CONFIG
+# =====================================================================
+ANALYTICS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "analytics.db")
+ANALYTICS_PASSWORD = "layout2024"  # Change this to your desired password
+ANALYTICS_USERNAME = "admin"
 
 # =====================================================================
 # CONFIG
 # =====================================================================
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Cookie consent banner - Fully inline JavaScript for Gradio compatibility
+# Note: All analytics are now handled via Nginx logs -> Loki -> Grafana
+COOKIE_BANNER_HTML = """
+<style>
+.cookie-banner-box {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #fff;
+    padding: 20px 30px;
+    z-index: 99999;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    flex-wrap: wrap;
+    gap: 15px;
+    border-top: 3px solid #e94560;
+}
+.cookie-banner-box p {
+    margin: 0;
+    flex: 1;
+    min-width: 300px;
+    font-size: 14px;
+    line-height: 1.5;
+}
+.cookie-banner-box .cookie-btns {
+    display: flex;
+    gap: 10px;
+}
+.cookie-banner-box .cbtn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+    transition: all 0.2s ease;
+}
+.cookie-banner-box .cbtn-accept {
+    background: #e94560;
+    color: white;
+}
+.cookie-banner-box .cbtn-accept:hover {
+    background: #ff6b6b;
+}
+.cookie-banner-box .cbtn-decline {
+    background: transparent;
+    color: #fff;
+    border: 2px solid #fff;
+}
+.cookie-banner-box .cbtn-decline:hover {
+    background: rgba(255,255,255,0.1);
+}
+</style>
+
+<div class="cookie-banner-box" id="gdpr-cookie-banner">
+    <p>🍪 We use cookies and analytics to track usage and improve this service. 
+    This includes storing anonymous visitor information (IP hash, browser, device type).
+    By clicking "Accept", you consent to analytics tracking.</p>
+    <div class="cookie-btns">
+        <button class="cbtn cbtn-decline" onclick="document.cookie='analytics_consent=declined;expires='+new Date(Date.now()+31536000000).toUTCString()+';path=/';this.closest('.cookie-banner-box').style.display='none';">Decline</button>
+        <button class="cbtn cbtn-accept" onclick="document.cookie='analytics_consent=accepted;expires='+new Date(Date.now()+31536000000).toUTCString()+';path=/';this.closest('.cookie-banner-box').style.display='none';">Accept Cookies</button>
+    </div>
+</div>
+
+<script>
+(function(){
+    if(document.cookie.indexOf('analytics_consent=')>=0){
+        var b=document.getElementById('gdpr-cookie-banner');
+        if(b)b.style.display='none';
+    }
+})();
+</script>
+"""
 
 # Final combined classes exposed to the user (25 classes)
 FINAL_CLASSES = list(coco_class_mapping.keys())
@@ -329,8 +541,8 @@ def _run_combined_on_path(
     - annotated image (all final classes drawn)
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
-        # Run 3 models and save predictions JSON
-        labels_folders = run_model_predictions(image_path, tmp_dir)
+        # Run 3 models in parallel using pre-initialized process pool
+        labels_folders = run_models_parallel(image_path, tmp_dir)
 
         # Combine & filter to coco_class_mapping
         coco_json = combine_and_filter_predictions(
@@ -628,11 +840,251 @@ def download_batch_zip(gallery_images: List[Tuple[str, np.ndarray]]) -> str | No
 
 
 # =====================================================================
+# ANALYTICS TAB HANDLERS
+# =====================================================================
+
+def verify_analytics_password(username: str, password: str) -> Tuple[bool, str]:
+    """Verify username and password for analytics access."""
+    if username == ANALYTICS_USERNAME and password == ANALYTICS_PASSWORD:
+        return True, "✅ Access granted! Loading analytics..."
+    return False, "❌ Invalid credentials. Please try again."
+
+
+def get_analytics_data(days_filter: int = 30) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict]:
+    """Fetch analytics data from SQLite database."""
+    try:
+        conn = sqlite3.connect(ANALYTICS_DB)
+        
+        # Calculate date filter
+        if days_filter > 0:
+            date_cutoff = (datetime.now() - timedelta(days=days_filter)).strftime('%Y-%m-%d')
+            date_filter = f"WHERE DATE(timestamp) >= '{date_cutoff}'"
+        else:
+            date_filter = ""
+        
+        # Get visits by country
+        country_query = f"""
+            SELECT 
+                COALESCE(NULLIF(country, ''), 'Unknown') as country,
+                COUNT(*) as visits,
+                COUNT(DISTINCT visitor_id) as unique_visitors
+            FROM visits
+            {date_filter}
+            GROUP BY country
+            ORDER BY visits DESC
+        """
+        country_df = pd.read_sql_query(country_query, conn)
+        
+        # Get visits by day
+        daily_query = f"""
+            SELECT 
+                DATE(timestamp) as date,
+                COUNT(*) as visits,
+                COUNT(DISTINCT visitor_id) as unique_visitors
+            FROM visits
+            {date_filter}
+            GROUP BY DATE(timestamp)
+            ORDER BY date DESC
+            LIMIT 30
+        """
+        daily_df = pd.read_sql_query(daily_query, conn)
+        
+        # Get recent visits
+        recent_query = f"""
+            SELECT 
+                timestamp,
+                COALESCE(NULLIF(country, ''), 'Unknown') as country,
+                COALESCE(NULLIF(city, ''), 'Unknown') as city,
+                browser,
+                os,
+                device,
+                page,
+                action
+            FROM visits
+            {date_filter}
+            ORDER BY timestamp DESC
+            LIMIT 100
+        """
+        recent_df = pd.read_sql_query(recent_query, conn)
+        
+        # Get summary stats
+        today = datetime.now().strftime('%Y-%m-%d')
+        summary_query = f"""
+            SELECT 
+                COUNT(*) as total_visits,
+                COUNT(DISTINCT visitor_id) as unique_visitors,
+                COUNT(DISTINCT COALESCE(NULLIF(country, ''), 'Unknown')) as countries,
+                SUM(CASE WHEN DATE(timestamp) = '{today}' THEN 1 ELSE 0 END) as today_visits,
+                SUM(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) as bot_visits
+            FROM visits
+            {date_filter}
+        """
+        summary_df = pd.read_sql_query(summary_query, conn)
+        summary = summary_df.iloc[0].to_dict() if len(summary_df) > 0 else {}
+        
+        conn.close()
+        return country_df, daily_df, recent_df, summary
+        
+    except Exception as e:
+        print(f"Analytics DB error: {e}")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}
+
+
+def create_world_map(country_df: pd.DataFrame) -> str:
+    """Create a world map visualization of visitors by country using matplotlib."""
+    try:
+        fig, ax = plt.subplots(figsize=(14, 8))
+        
+        if country_df.empty or len(country_df) == 0:
+            ax.text(0.5, 0.5, "No visitor data available", ha='center', va='center', fontsize=16)
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.axis('off')
+        else:
+            # Create a horizontal bar chart of countries (better than empty map)
+            df = country_df.head(15).copy()  # Top 15 countries
+            
+            # Sort by visits ascending for horizontal bar (so highest is at top)
+            df = df.sort_values('visits', ascending=True)
+            
+            colors = plt.cm.Blues(np.linspace(0.3, 0.9, len(df)))
+            
+            y_pos = np.arange(len(df))
+            bars = ax.barh(y_pos, df['visits'], color=colors, edgecolor='navy', linewidth=0.5)
+            
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(df['country'], fontsize=11)
+            ax.set_xlabel('Number of Visits', fontsize=12)
+            ax.set_title('🌍 Top Countries by Visits', fontsize=16, fontweight='bold', pad=20)
+            
+            # Add value labels on bars
+            for i, (bar, visits, unique) in enumerate(zip(bars, df['visits'], df['unique_visitors'])):
+                ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2,
+                       f'{int(visits)} ({int(unique)} unique)',
+                       va='center', fontsize=9, color='#333')
+            
+            # Add grid
+            ax.xaxis.grid(True, linestyle='--', alpha=0.7)
+            ax.set_axisbelow(True)
+            
+            # Style
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            
+            # Expand x-axis to fit labels
+            max_val = df['visits'].max()
+            ax.set_xlim(0, max_val * 1.3)
+        
+        plt.tight_layout()
+        map_path = os.path.join(tempfile.gettempdir(), f"analytics_map_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+        fig.savefig(map_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        return map_path
+        
+    except Exception as e:
+        print(f"Map creation error: {e}")
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.text(0.5, 0.5, f"Error creating visualization: {str(e)}", ha='center', va='center', fontsize=12)
+        ax.axis('off')
+        map_path = os.path.join(tempfile.gettempdir(), "analytics_map_error.png")
+        fig.savefig(map_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        return map_path
+
+
+def create_daily_chart(daily_df: pd.DataFrame) -> str:
+    """Create a bar chart of daily visits."""
+    fig, ax = plt.subplots(figsize=(12, 5))
+    
+    if daily_df.empty:
+        ax.text(0.5, 0.5, "No visit data available", ha='center', va='center', fontsize=14)
+        ax.axis('off')
+    else:
+        # Reverse to show oldest first
+        df = daily_df.iloc[::-1].copy()
+        x = range(len(df))
+        
+        bars = ax.bar(x, df['visits'], color='steelblue', alpha=0.8, label='Total Visits')
+        ax.plot(x, df['unique_visitors'], color='orange', marker='o', linewidth=2, label='Unique Visitors')
+        
+        ax.set_xticks(x)
+        ax.set_xticklabels(df['date'], rotation=45, ha='right', fontsize=8)
+        ax.set_ylabel('Count')
+        ax.set_title('Daily Visits (Last 30 Days)')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    chart_path = os.path.join(tempfile.gettempdir(), f"daily_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+    fig.savefig(chart_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return chart_path
+
+
+def refresh_analytics(days_filter: int) -> Tuple[str, str, str, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Refresh all analytics data and visualizations."""
+    country_df, daily_df, recent_df, summary = get_analytics_data(days_filter)
+    
+    # Create summary text
+    if summary:
+        summary_text = f"""
+### 📊 Analytics Summary
+
+| Metric | Value |
+|--------|-------|
+| **Total Visits** | {summary.get('total_visits', 0):,} |
+| **Unique Visitors** | {summary.get('unique_visitors', 0):,} |
+| **Countries** | {summary.get('countries', 0)} |
+| **Visits Today** | {summary.get('today_visits', 0):,} |
+| **Bot Visits** | {summary.get('bot_visits', 0):,} |
+"""
+    else:
+        summary_text = "### No analytics data available"
+    
+    # Create visualizations
+    map_path = create_world_map(country_df)
+    chart_path = create_daily_chart(daily_df)
+    
+    return summary_text, map_path, chart_path, country_df, daily_df, recent_df
+
+
+def analytics_login(username: str, password: str) -> Tuple[gr.update, gr.update, str, str, str, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Handle analytics login and load data if successful."""
+    is_valid, message = verify_analytics_password(username, password)
+    
+    if is_valid:
+        # Load analytics data
+        summary_text, map_path, chart_path, country_df, daily_df, recent_df = refresh_analytics(30)
+        return (
+            gr.update(visible=False),  # Hide login panel
+            gr.update(visible=True),   # Show analytics content
+            summary_text,
+            map_path,
+            chart_path,
+            country_df,
+            daily_df,
+            recent_df
+        )
+    else:
+        return (
+            gr.update(visible=True),   # Keep login panel visible
+            gr.update(visible=False),  # Keep analytics hidden
+            message,
+            None,
+            None,
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame()
+        )
+
+
+# =====================================================================
 # GRADIO UI
 # =====================================================================
 
 
 with gr.Blocks() as demo:
+    gr.HTML(COOKIE_BANNER_HTML)
     gr.Markdown("## Combined Manuscript Models (emanuskript + catmus + zone)")
     
     with gr.Tabs():
@@ -785,6 +1237,69 @@ with gr.Blocks() as demo:
                                     label="Batch Statistics Graph", type="filepath"
                                 )
 
+        # Analytics tab (password protected)
+        with gr.TabItem("📈 Analytics"):
+            with gr.Column() as analytics_login_panel:
+                gr.Markdown("### 🔐 Analytics Login")
+                gr.Markdown("Enter credentials to access visitor analytics.")
+                with gr.Row():
+                    analytics_username = gr.Textbox(
+                        label="Username",
+                        placeholder="Enter username",
+                        scale=1
+                    )
+                    analytics_password = gr.Textbox(
+                        label="Password",
+                        placeholder="Enter password",
+                        type="password",
+                        scale=1
+                    )
+                analytics_login_btn = gr.Button("🔓 Login", variant="primary")
+                analytics_login_status = gr.Markdown("")
+            
+            with gr.Column(visible=False) as analytics_content:
+                with gr.Row():
+                    analytics_summary = gr.Markdown("### Loading analytics...")
+                    with gr.Column():
+                        analytics_days_filter = gr.Slider(
+                            label="Days to show",
+                            minimum=1,
+                            maximum=365,
+                            value=30,
+                            step=1
+                        )
+                        analytics_refresh_btn = gr.Button("🔄 Refresh", size="sm")
+                
+                with gr.Tabs():
+                    with gr.TabItem("🗺️ World Map"):
+                        analytics_map = gr.Image(label="Visitors by Country", type="filepath")
+                    
+                    with gr.TabItem("📊 Daily Chart"):
+                        analytics_daily_chart = gr.Image(label="Daily Visits", type="filepath")
+                    
+                    with gr.TabItem("🌍 By Country"):
+                        analytics_country_table = gr.Dataframe(
+                            label="Visits by Country",
+                            headers=["country", "visits", "unique_visitors"],
+                            wrap=True
+                        )
+                    
+                    with gr.TabItem("📅 By Day"):
+                        analytics_daily_table = gr.Dataframe(
+                            label="Daily Statistics",
+                            headers=["date", "visits", "unique_visitors"],
+                            wrap=True
+                        )
+                    
+                    with gr.TabItem("🕐 Recent Visits"):
+                        analytics_recent_table = gr.Dataframe(
+                            label="Recent Visits (Last 100)",
+                            wrap=True
+                        )
+                
+                analytics_logout_btn = gr.Button("🚪 Logout", size="sm")
+
+
     # Callbacks
     detect_btn.click(
         fn=process_single_image,
@@ -842,9 +1357,71 @@ with gr.Blocks() as demo:
         inputs=[batch_gallery],
         outputs=[zip_file_output],
     )
+    
+    # Analytics tab callbacks
+    analytics_login_btn.click(
+        fn=analytics_login,
+        inputs=[analytics_username, analytics_password],
+        outputs=[
+            analytics_login_panel,
+            analytics_content,
+            analytics_summary,
+            analytics_map,
+            analytics_daily_chart,
+            analytics_country_table,
+            analytics_daily_table,
+            analytics_recent_table
+        ]
+    )
+    
+    analytics_refresh_btn.click(
+        fn=refresh_analytics,
+        inputs=[analytics_days_filter],
+        outputs=[
+            analytics_summary,
+            analytics_map,
+            analytics_daily_chart,
+            analytics_country_table,
+            analytics_daily_table,
+            analytics_recent_table
+        ]
+    )
+    
+    analytics_logout_btn.click(
+        fn=lambda: (
+            gr.update(visible=True),   # Show login panel
+            gr.update(visible=False),  # Hide analytics content
+            "",                         # Clear username
+            ""                          # Clear password
+        ),
+        inputs=None,
+        outputs=[
+            analytics_login_panel,
+            analytics_content,
+            analytics_username,
+            analytics_password
+        ]
+    )
+
+
+
+def _cleanup_pool():
+    """Cleanup worker pool on shutdown."""
+    global _model_pool
+    if _model_pool is not None:
+        _model_pool.shutdown(wait=False)
+        _model_pool = None
 
 
 if __name__ == "__main__":
+    import atexit
+    atexit.register(_cleanup_pool)
+    
+    # Pre-initialize the pool before Gradio starts (avoids spawn from threads)
+    print("Initializing model worker pool...", flush=True)
+    _get_model_pool()
+    print("Worker pool ready.", flush=True)
+    
     demo.queue()
     demo.launch(
         debug=False,

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import { Header } from "@/components/layout/Header";
+import { JotaiProvider } from "@/lib/context/JotaiProvider";
 
 import "./globals.css";
 
@@ -28,8 +29,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <Header />
-        <main className="mx-auto max-w-7xl px-6 py-6">{children}</main>
+        <JotaiProvider>
+          <Header />
+          <main className="min-h-[calc(100vh-57px)]">{children}</main>
+        </JotaiProvider>
       </body>
     </html>
   );

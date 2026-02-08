@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAtomValue, useSetAtom } from "jotai";
 
+import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { apiUrl } from "@/lib/api/client";
 import {
   fileCountAtom,
@@ -51,7 +52,7 @@ export function Header() {
   const isBatch = selectedFile?.kind === "zip";
 
   return (
-    <header className="sticky top-0 z-40 h-14 border-b bg-white/95 backdrop-blur-sm">
+    <header className="sticky top-0 z-40 h-14 border-b bg-background/95 backdrop-blur-sm">
       <div className="flex h-full items-center justify-between px-4">
         {/* Left: title */}
         <Link href="/analyze" className="text-lg font-bold tracking-tight">
@@ -79,6 +80,9 @@ export function Header() {
             </button>
           )}
 
+          {/* Theme toggle */}
+          <ThemeToggle />
+
           {/* Export dropdown */}
           {taskId && (
             <div ref={menuRef} className="relative">
@@ -96,7 +100,7 @@ export function Header() {
               </button>
 
               {open && (
-                <div className="absolute right-0 top-full mt-1 w-56 rounded-md border bg-white py-1 shadow-lg">
+                <div className="absolute right-0 top-full mt-1 w-56 rounded-md border bg-popover py-1 shadow-lg">
                   <a
                     href={apiUrl(`/download/${taskId}/coco_json`)}
                     download

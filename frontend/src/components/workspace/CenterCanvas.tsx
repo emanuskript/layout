@@ -146,7 +146,7 @@ export function CenterCanvas() {
             className="max-h-full max-w-full rounded-lg object-contain opacity-50 shadow-sm"
           />
         ) : (
-          <div className="flex flex-col items-center gap-3 rounded-lg border bg-white p-8 shadow-sm opacity-50">
+          <div className="flex flex-col items-center gap-3 rounded-lg border bg-card p-8 shadow-sm opacity-50">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
               <svg className="h-8 w-8 text-muted-foreground" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
@@ -156,7 +156,7 @@ export function CenterCanvas() {
           </div>
         )}
         {/* Loading spinner overlay */}
-        <div className="absolute inset-0 flex items-center justify-center bg-white/30">
+        <div className="absolute inset-0 flex items-center justify-center bg-background/30">
           <div className="flex flex-col items-center gap-2">
             <svg className="h-8 w-8 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -182,7 +182,7 @@ export function CenterCanvas() {
           />
         ) : null}
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="rounded-lg bg-white p-4 text-center shadow-sm">
+          <div className="rounded-lg bg-card p-4 text-center shadow-sm">
             <p className="text-sm font-medium text-destructive">Analysis failed</p>
             {selectedFile.error && (
               <p className="mt-1 text-xs text-muted-foreground">{selectedFile.error}</p>
@@ -204,7 +204,7 @@ export function CenterCanvas() {
           className="max-h-full max-w-full rounded-lg object-contain shadow-sm"
         />
       ) : (
-        <div className="flex flex-col items-center gap-3 rounded-lg border bg-white p-8 shadow-sm">
+        <div className="flex flex-col items-center gap-3 rounded-lg border bg-card p-8 shadow-sm">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
             <svg className="h-8 w-8 text-muted-foreground" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />

@@ -42,7 +42,7 @@ export function LeftPanel() {
   return (
     <aside
       style={{ gridArea: "left" }}
-      className="flex flex-col overflow-hidden border-r bg-white"
+      className="flex flex-col overflow-hidden border-r bg-background"
     >
       {/* File list header */}
       <div className="flex items-center justify-between border-b px-3 py-2">

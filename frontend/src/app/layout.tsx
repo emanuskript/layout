@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 
 import { Header } from "@/components/layout/Header";
 import { JotaiProvider } from "@/lib/context/JotaiProvider";
+import { ThemeProvider } from "@/lib/context/ThemeProvider";
 
 import "./globals.css";
 
@@ -27,12 +28,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <JotaiProvider>
-          <Header />
-          <main className="min-h-[calc(100vh-57px)]">{children}</main>
-        </JotaiProvider>
+        <ThemeProvider>
+          <JotaiProvider>
+            <Header />
+            <main className="min-h-[calc(100vh-57px)]">{children}</main>
+          </JotaiProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

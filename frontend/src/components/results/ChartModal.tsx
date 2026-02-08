@@ -23,7 +23,7 @@ export function ChartModal() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setOpen(false)}>
       <div
-        className="relative w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl"
+        className="relative w-full max-w-2xl rounded-lg bg-popover p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">

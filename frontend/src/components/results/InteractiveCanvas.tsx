@@ -309,7 +309,7 @@ export function InteractiveCanvas({
       />
 
       {/* Floating controls */}
-      <div className="absolute bottom-3 left-3 flex items-center gap-3 rounded-lg border bg-white/90 px-3 py-1.5 shadow-sm backdrop-blur-sm">
+      <div className="absolute bottom-3 left-3 flex items-center gap-3 rounded-lg border bg-card/90 px-3 py-1.5 shadow-sm backdrop-blur-sm">
         <span className="text-xs font-medium text-muted-foreground">Opacity</span>
         <Slider
           className="w-24"
@@ -338,7 +338,7 @@ export function InteractiveCanvas({
       {/* Hover tooltip */}
       {tooltip && (
         <div
-          className="pointer-events-none fixed z-50 rounded-md border bg-white px-3 py-2 text-xs shadow-lg"
+          className="pointer-events-none fixed z-50 rounded-md border bg-popover px-3 py-2 text-xs shadow-lg"
           style={{ left: tooltip.x + 12, top: tooltip.y + 12 }}
         >
           <p className="font-semibold">{tooltip.className}</p>

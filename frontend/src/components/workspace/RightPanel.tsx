@@ -57,7 +57,7 @@ export function RightPanel() {
   return (
     <aside
       style={{ gridArea: "right" }}
-      className="flex flex-col overflow-hidden border-l bg-white"
+      className="flex flex-col overflow-hidden border-l bg-background"
     >
       {/* Tabs */}
       <div className="flex h-10 items-center border-b">

@@ -17,7 +17,7 @@ export function DetectionSettings({
   onIouChange,
 }: DetectionSettingsProps) {
   return (
-    <div className="space-y-4">
+    <div data-tour="detection-settings" className="space-y-4">
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label>Confidence Threshold</Label>

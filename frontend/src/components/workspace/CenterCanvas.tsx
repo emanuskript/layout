@@ -54,8 +54,8 @@ export function CenterCanvas() {
   // ── No files at all: center drop zone ──
   if (fileCount === 0) {
     return (
-      <div style={{ gridArea: "canvas" }} className="flex items-center justify-center bg-muted/30">
-        <div className="w-full max-w-md px-8">
+      <div data-tour="canvas" style={{ gridArea: "canvas" }} className="flex items-center justify-center bg-muted/30">
+        <div data-tour="file-upload" className="w-full max-w-md px-8">
           <FileUploader
             file={null}
             onFileChange={(f) => { if (f) addFiles([f]); }}

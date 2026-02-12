@@ -41,6 +41,7 @@ export function LeftPanel() {
 
   return (
     <aside
+      data-tour="left-panel"
       style={{ gridArea: "left" }}
       className="flex flex-col overflow-hidden border-r bg-background"
     >

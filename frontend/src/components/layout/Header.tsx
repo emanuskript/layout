@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAtomValue, useSetAtom } from "jotai";
+import { HelpCircle } from "lucide-react";
 
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { apiUrl } from "@/lib/api/client";
@@ -14,6 +15,7 @@ import {
   selectedClassNamesAtom,
   runAllIdleFilesAtom,
   resetWorkspaceAtom,
+  startTourAtom,
 } from "@/lib/atoms";
 
 export function Header() {
@@ -24,6 +26,7 @@ export function Header() {
   const selectedClassNames = useAtomValue(selectedClassNamesAtom);
   const runAll = useSetAtom(runAllIdleFilesAtom);
   const resetWorkspace = useSetAtom(resetWorkspaceAtom);
+  const startTour = useSetAtom(startTourAtom);
 
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -64,6 +67,7 @@ export function Header() {
           {/* Run button */}
           {hasFiles && !anyHasResults && (
             <button
+              data-tour="run-analysis"
               onClick={() => runAll()}
               disabled={runDisabled}
               className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 disabled:pointer-events-none"
@@ -81,11 +85,23 @@ export function Header() {
           )}
 
           {/* Theme toggle */}
-          <ThemeToggle />
+          <div data-tour="theme-toggle">
+            <ThemeToggle />
+          </div>
+
+          {/* Help / Tour */}
+          <button
+            onClick={() => startTour()}
+            className="flex h-8 w-8 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Help & Tour"
+            aria-label="Help & Tour"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </button>
 
           {/* Export dropdown */}
           {taskId && (
-            <div ref={menuRef} className="relative">
+            <div data-tour="export" ref={menuRef} className="relative">
               <button
                 onClick={() => setOpen((o) => !o)}
                 className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"

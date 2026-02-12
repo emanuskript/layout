@@ -64,6 +64,13 @@ export function RightPanel() {
         {tabs.map((tab) => (
           <button
             key={tab.id}
+            data-tour={
+              tab.id === "filter"
+                ? "class-filter"
+                : tab.id === "results"
+                  ? "results-tab"
+                  : "inspector-tab"
+            }
             onClick={() => {
               if (!tab.disabled) {
                 setActiveTab(tab.id);

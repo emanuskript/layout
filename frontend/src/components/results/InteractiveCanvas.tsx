@@ -4,7 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Slider } from "@/components/ui/slider";
 import { COCOAnnotation, COCOJson } from "@/lib/types/coco";
-import { drawAnnotationsTransformed, hitTestAnnotation } from "@/lib/utils/annotations";
+import {
+  drawAnnotationsTransformed,
+  hitTestAnnotation,
+  HandleType,
+  hitTestHandle,
+  drawEditHandles,
+  applyHandleDrag,
+  handleCursor,
+} from "@/lib/utils/annotations";
 
 interface InteractiveCanvasProps {
   imageSrc: string;
@@ -12,6 +20,9 @@ interface InteractiveCanvasProps {
   colorMap: Map<string, string>;
   selectedClasses: Set<string>;
   onAnnotationClick?: (ann: COCOAnnotation | null) => void;
+  selectedAnnotationId?: number | null;
+  editingAnnotationId?: number | null;
+  onBboxChange?: (annotationId: number, bbox: [number, number, number, number]) => void;
 }
 
 interface Transform {
@@ -35,6 +46,9 @@ export function InteractiveCanvas({
   colorMap,
   selectedClasses,
   onAnnotationClick,
+  selectedAnnotationId,
+  editingAnnotationId,
+  onBboxChange,
 }: InteractiveCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -51,9 +65,19 @@ export function InteractiveCanvas({
     bbox: [number, number, number, number];
   } | null>(null);
   const [zoomDisplay, setZoomDisplay] = useState(100);
+  const [cursorStyle, setCursorStyle] = useState("");
 
   // Pan tracking (dragged distinguishes click from drag)
   const panRef = useRef({ active: false, dragged: false, startX: 0, startY: 0, origOX: 0, origOY: 0 });
+
+  // Edit drag tracking
+  const editDragRef = useRef<{
+    handle: HandleType;
+    startImageX: number;
+    startImageY: number;
+    originalBbox: [number, number, number, number];
+    annotationId: number;
+  } | null>(null);
 
   const catById = useRef(new Map<number, string>());
 
@@ -62,6 +86,12 @@ export function InteractiveCanvas({
     const imgH = cocoJson.images[0]?.height ?? imgRef.current?.naturalHeight ?? 1;
     return { imgW, imgH };
   }, [cocoJson]);
+
+  // Find editing annotation from cocoJson
+  const getEditingAnnotation = useCallback((): COCOAnnotation | null => {
+    if (editingAnnotationId == null) return null;
+    return cocoJson.annotations.find((a) => a.id === editingAnnotationId) ?? null;
+  }, [cocoJson, editingAnnotationId]);
 
   // ── Draw ──
   const redraw = useCallback(
@@ -97,10 +127,28 @@ export function InteractiveCanvas({
         t.offsetX,
         t.offsetY,
         cocoJson.images[0],
-        { fillOpacity: opacity, highlightedId: highlightId },
+        {
+          fillOpacity: opacity,
+          highlightedId: highlightId,
+          selectedId: selectedAnnotationId,
+          editingId: editingAnnotationId,
+        },
       );
+
+      // Draw edit handles for the editing annotation
+      const editAnn = cocoJson.annotations.find(
+        (a) => a.id === editingAnnotationId,
+      );
+      if (editAnn) {
+        ctx.save();
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.translate(t.offsetX, t.offsetY);
+        ctx.scale(t.scale, t.scale);
+        drawEditHandles(ctx, editAnn.bbox, t.scale);
+        ctx.restore();
+      }
     },
-    [cocoJson, colorMap, selectedClasses, opacity],
+    [cocoJson, colorMap, selectedClasses, opacity, selectedAnnotationId, editingAnnotationId],
   );
 
   // ── Fit to view ──
@@ -135,7 +183,7 @@ export function InteractiveCanvas({
     img.src = imageSrc;
   }, [imageSrc, cocoJson, redraw]);
 
-  // Redraw on filter / opacity changes
+  // Redraw on filter / opacity / editing changes
   useEffect(() => {
     redraw(hoveredIdRef.current);
   }, [selectedClasses, opacity, redraw]);
@@ -200,20 +248,77 @@ export function InteractiveCanvas({
   const DRAG_THRESHOLD = 4; // px — below this it's a click, above it's a drag
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 0 || e.button === 1) {
-      e.preventDefault();
-      panRef.current = {
-        active: true,
-        dragged: false,
-        startX: e.clientX,
-        startY: e.clientY,
-        origOX: tRef.current.offsetX,
-        origOY: tRef.current.offsetY,
-      };
+    if (e.button !== 0 && e.button !== 1) return;
+    e.preventDefault();
+
+    // If editing, check if clicking a handle or inside the bbox
+    if (editingAnnotationId != null && e.button === 0) {
+      const editAnn = getEditingAnnotation();
+      if (editAnn) {
+        const coords = screenToImage(e.clientX, e.clientY);
+        if (coords) {
+          const handle = hitTestHandle(
+            coords.x,
+            coords.y,
+            editAnn.bbox,
+            tRef.current.scale,
+          );
+          if (handle) {
+            editDragRef.current = {
+              handle,
+              startImageX: coords.x,
+              startImageY: coords.y,
+              originalBbox: [...editAnn.bbox],
+              annotationId: editAnn.id,
+            };
+            return;
+          }
+          // Check if inside the bbox for move
+          const [bx, by, bw, bh] = editAnn.bbox;
+          if (
+            coords.x >= bx &&
+            coords.x <= bx + bw &&
+            coords.y >= by &&
+            coords.y <= by + bh
+          ) {
+            editDragRef.current = {
+              handle: "move",
+              startImageX: coords.x,
+              startImageY: coords.y,
+              originalBbox: [...editAnn.bbox],
+              annotationId: editAnn.id,
+            };
+            return;
+          }
+        }
+      }
     }
+
+    // Default: start pan
+    panRef.current = {
+      active: true,
+      dragged: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      origOX: tRef.current.offsetX,
+      origOY: tRef.current.offsetY,
+    };
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    // Handle edit drag
+    const ed = editDragRef.current;
+    if (ed) {
+      const coords = screenToImage(e.clientX, e.clientY);
+      if (!coords) return;
+      const deltaX = coords.x - ed.startImageX;
+      const deltaY = coords.y - ed.startImageY;
+      const newBbox = applyHandleDrag(ed.originalBbox, ed.handle, deltaX, deltaY);
+      onBboxChange?.(ed.annotationId, newBbox);
+      return;
+    }
+
+    // Handle pan
     const p = panRef.current;
     if (p.active) {
       const dx = e.clientX - p.startX;
@@ -233,8 +338,42 @@ export function InteractiveCanvas({
       }
     }
 
+    // Hover detection
     const coords = screenToImage(e.clientX, e.clientY);
     if (!coords) return;
+
+    // If editing, update cursor based on handle hover
+    if (editingAnnotationId != null) {
+      const editAnn = getEditingAnnotation();
+      if (editAnn) {
+        const handle = hitTestHandle(
+          coords.x,
+          coords.y,
+          editAnn.bbox,
+          tRef.current.scale,
+        );
+        if (handle) {
+          setCursorStyle(handleCursor(handle));
+          setTooltip(null);
+          return;
+        }
+        // Inside bbox = move cursor
+        const [bx, by, bw, bh] = editAnn.bbox;
+        if (
+          coords.x >= bx &&
+          coords.x <= bx + bw &&
+          coords.y >= by &&
+          coords.y <= by + bh
+        ) {
+          setCursorStyle("move");
+          setTooltip(null);
+          return;
+        }
+      }
+      setCursorStyle("");
+    } else {
+      setCursorStyle("");
+    }
 
     const ann = hitTestAnnotation(
       coords.x,
@@ -266,6 +405,12 @@ export function InteractiveCanvas({
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
+    // Finalize edit drag
+    if (editDragRef.current) {
+      editDragRef.current = null;
+      return;
+    }
+
     const p = panRef.current;
     const wasDrag = p.dragged;
     panRef.current = { ...p, active: false, dragged: false };
@@ -287,20 +432,25 @@ export function InteractiveCanvas({
 
   const handleMouseLeave = () => {
     panRef.current = { ...panRef.current, active: false, dragged: false };
+    editDragRef.current = null;
     if (hoveredIdRef.current !== null) {
       hoveredIdRef.current = null;
       redraw(null);
     }
     setTooltip(null);
+    setCursorStyle("");
   };
 
   const handleDoubleClick = () => fitToView();
+
+  const canvasCursor = cursorStyle || (editingAnnotationId != null ? "default" : "");
 
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden">
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 cursor-grab active:cursor-grabbing"
+        className={`absolute inset-0 ${canvasCursor ? "" : "cursor-grab active:cursor-grabbing"}`}
+        style={canvasCursor ? { cursor: canvasCursor } : undefined}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

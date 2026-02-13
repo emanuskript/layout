@@ -16,6 +16,9 @@ import {
   selectedClassNamesAtom,
   inspectedAnnotationAtom,
   selectedBatchImageIndexAtom,
+  editingAnnotationIdAtom,
+  applyBboxEditAtom,
+  effectiveCocoJsonAtom,
 } from "@/lib/atoms";
 
 /** Extract single-image COCO JSON from a merged batch COCO JSON by filename */
@@ -37,8 +40,13 @@ export function CenterCanvas() {
   const addFiles = useSetAtom(addFilesAtom);
   const colorMap = useAtomValue(colorMapAtom);
   const selectedClasses = useAtomValue(selectedClassNamesAtom);
+  const inspectedAnnotation = useAtomValue(inspectedAnnotationAtom);
   const setInspectedAnnotation = useSetAtom(inspectedAnnotationAtom);
   const [selectedBatchImage, setSelectedBatchImage] = useAtom(selectedBatchImageIndexAtom);
+  const editingAnnotationId = useAtomValue(editingAnnotationIdAtom);
+  const setEditingAnnotationId = useSetAtom(editingAnnotationIdAtom);
+  const applyBboxEdit = useSetAtom(applyBboxEditAtom);
+  const effectiveCocoJson = useAtomValue(effectiveCocoJsonAtom);
 
   const [imageSrc, setImageSrc] = useState("");
   useEffect(() => {
@@ -77,15 +85,25 @@ export function CenterCanvas() {
   const mode = selectedFile.kind === "zip" ? "batch" : "single";
 
   // ── Single mode with results: InteractiveCanvas ──
-  if (mode === "single" && selectedFile.singleResult) {
+  if (mode === "single" && selectedFile.singleResult && effectiveCocoJson) {
     return (
       <div style={{ gridArea: "canvas" }} className="relative overflow-hidden bg-muted/30">
         <InteractiveCanvas
           imageSrc={imageSrc}
-          cocoJson={selectedFile.singleResult.coco_json}
+          cocoJson={effectiveCocoJson}
           colorMap={colorMap}
           selectedClasses={selectedClasses}
-          onAnnotationClick={setInspectedAnnotation}
+          onAnnotationClick={(ann) => {
+            if (!ann || ann.id !== editingAnnotationId) {
+              setEditingAnnotationId(null);
+            }
+            setInspectedAnnotation(ann);
+          }}
+          selectedAnnotationId={inspectedAnnotation?.id ?? null}
+          editingAnnotationId={editingAnnotationId}
+          onBboxChange={(annotationId, bbox) =>
+            applyBboxEdit({ fileId: selectedFile.id, annotationId, bbox })
+          }
         />
       </div>
     );

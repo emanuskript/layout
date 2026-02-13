@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 
 import { ClassFilterSidebar } from "@/components/analysis/ClassFilterSidebar";
@@ -18,6 +18,10 @@ import {
   selectedFileAtom,
   inspectedAnnotationAtom,
   chartModalOpenAtom,
+  editingAnnotationIdAtom,
+  resetAnnotationEditAtom,
+  annotationEditsAtom,
+  effectiveCocoJsonAtom,
 } from "@/lib/atoms";
 
 type TabId = "filter" | "results" | "inspector";
@@ -33,6 +37,11 @@ export function RightPanel() {
   const inspectedAnnotation = useAtomValue(inspectedAnnotationAtom);
   const setInspectedAnnotation = useSetAtom(inspectedAnnotationAtom);
   const setChartModalOpen = useSetAtom(chartModalOpenAtom);
+  const editingAnnotationId = useAtomValue(editingAnnotationIdAtom);
+  const setEditingAnnotationId = useSetAtom(editingAnnotationIdAtom);
+  const resetAnnotationEdit = useSetAtom(resetAnnotationEditAtom);
+  const annotationEdits = useAtomValue(annotationEditsAtom);
+  const effectiveCocoJson = useAtomValue(effectiveCocoJsonAtom);
 
   const [activeTab, setActiveTab] = useState<TabId>("filter");
 
@@ -42,8 +51,24 @@ export function RightPanel() {
     selectedFile?.batchResults?.stats_summary ??
     null;
 
-  const categories = selectedFile?.singleResult?.coco_json?.categories ?? [];
-  const imageInfo = selectedFile?.singleResult?.coco_json?.images?.[0];
+  const categories = effectiveCocoJson?.categories ?? selectedFile?.singleResult?.coco_json?.categories ?? [];
+  const imageInfo = effectiveCocoJson?.images?.[0] ?? selectedFile?.singleResult?.coco_json?.images?.[0];
+
+  // Get the effective annotation (with edits applied)
+  const effectiveAnnotation = useMemo(() => {
+    if (!inspectedAnnotation) return null;
+    const effective = effectiveCocoJson?.annotations.find(
+      (a) => a.id === inspectedAnnotation.id,
+    );
+    return effective ?? inspectedAnnotation;
+  }, [inspectedAnnotation, effectiveCocoJson]);
+
+  const isEditing = editingAnnotationId != null && editingAnnotationId === inspectedAnnotation?.id;
+  const currentAnnotationHasEdits = !!(
+    selectedFile &&
+    inspectedAnnotation &&
+    annotationEdits.get(selectedFile.id)?.has(inspectedAnnotation.id)
+  );
 
   // Auto-switch to inspector when annotation is clicked
   const currentTab = inspectedAnnotation ? "inspector" : activeTab;
@@ -74,7 +99,10 @@ export function RightPanel() {
             onClick={() => {
               if (!tab.disabled) {
                 setActiveTab(tab.id);
-                if (tab.id !== "inspector") setInspectedAnnotation(null);
+                if (tab.id !== "inspector") {
+                  setEditingAnnotationId(null);
+                  setInspectedAnnotation(null);
+                }
               }
             }}
             disabled={tab.disabled}
@@ -119,13 +147,28 @@ export function RightPanel() {
             </div>
           </div>
         )}
-        {currentTab === "inspector" && inspectedAnnotation && (
+        {currentTab === "inspector" && effectiveAnnotation && (
           <AnnotationInspector
-            annotation={inspectedAnnotation}
+            annotation={effectiveAnnotation}
             categories={categories}
             colorMap={colorMap}
             imageInfo={imageInfo}
-            onClose={() => setInspectedAnnotation(null)}
+            onClose={() => {
+              setEditingAnnotationId(null);
+              setInspectedAnnotation(null);
+            }}
+            isEditing={isEditing}
+            onEdit={() => setEditingAnnotationId(effectiveAnnotation.id)}
+            onDoneEditing={() => setEditingAnnotationId(null)}
+            onReset={() => {
+              if (selectedFile && inspectedAnnotation) {
+                resetAnnotationEdit({
+                  fileId: selectedFile.id,
+                  annotationId: inspectedAnnotation.id,
+                });
+              }
+            }}
+            hasEdits={currentAnnotationHasEdits}
           />
         )}
       </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { Pencil, Check, RotateCcw } from "lucide-react";
 import { COCOAnnotation, COCOCategory, COCOImage } from "@/lib/types/coco";
 
 interface AnnotationInspectorProps {
@@ -8,6 +9,11 @@ interface AnnotationInspectorProps {
   colorMap: Map<string, string>;
   imageInfo?: COCOImage;
   onClose: () => void;
+  isEditing?: boolean;
+  onEdit?: () => void;
+  onDoneEditing?: () => void;
+  onReset?: () => void;
+  hasEdits?: boolean;
 }
 
 export function AnnotationInspector({
@@ -16,13 +22,18 @@ export function AnnotationInspector({
   colorMap,
   imageInfo,
   onClose,
+  isEditing,
+  onEdit,
+  onDoneEditing,
+  onReset,
+  hasEdits,
 }: AnnotationInspectorProps) {
   const catById = new Map(categories.map((c) => [c.id, c.name]));
   const className = catById.get(annotation.category_id) || "Unknown";
   const color = colorMap.get(className) || "#888888";
 
   const imgArea = imageInfo ? imageInfo.width * imageInfo.height : 0;
-  const coverage = imgArea > 0 ? ((annotation.area / imgArea) * 100).toFixed(1) : "—";
+  const coverage = imgArea > 0 ? ((annotation.area / imgArea) * 100).toFixed(1) : "\u2014";
 
   const segPolygons = annotation.segmentation?.length ?? 0;
   const totalVertices = annotation.segmentation
@@ -33,16 +44,58 @@ export function AnnotationInspector({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold">Annotation Details</h3>
-        <button
-          onClick={onClose}
-          className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-label="Close inspector"
-        >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-1">
+          {/* Edit / Done button */}
+          {isEditing ? (
+            <button
+              onClick={onDoneEditing}
+              className="rounded-md p-1 text-primary hover:bg-primary/10"
+              aria-label="Done editing"
+              title="Done editing"
+            >
+              <Check className="h-4 w-4" />
+            </button>
+          ) : (
+            onEdit && (
+              <button
+                onClick={onEdit}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Edit bounding box"
+                title="Edit bounding box"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+            )
+          )}
+          {/* Reset button (only when editing and has edits) */}
+          {isEditing && hasEdits && (
+            <button
+              onClick={onReset}
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Reset to original"
+              title="Reset to original"
+            >
+              <RotateCcw className="h-4 w-4" />
+            </button>
+          )}
+          {/* Close button */}
+          <button
+            onClick={onClose}
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Close inspector"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
+
+      {isEditing && (
+        <div className="rounded-md bg-primary/10 px-2.5 py-1.5 text-xs text-primary">
+          Drag handles to resize &middot; Drag inside to move
+        </div>
+      )}
 
       <div className="space-y-4">
         {/* Class */}
@@ -75,7 +128,10 @@ export function AnnotationInspector({
         {/* BBox */}
         {annotation.bbox && (
           <div>
-            <p className="mb-1 text-xs font-medium text-muted-foreground">Bounding Box</p>
+            <p className="mb-1 text-xs font-medium text-muted-foreground">
+              Bounding Box
+              {hasEdits && <span className="ml-1.5 text-primary">(edited)</span>}
+            </p>
             <div className="grid grid-cols-2 gap-1 text-sm">
               <span className="text-muted-foreground">x:</span>
               <span>{Math.round(annotation.bbox[0])}</span>
@@ -102,4 +158,3 @@ export function AnnotationInspector({
     </div>
   );
 }
-

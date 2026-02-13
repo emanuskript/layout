@@ -4,3 +4,4 @@ export * from "./classes";
 export * from "./ui";
 export * from "./actions";
 export * from "./tour";
+export * from "./editing";

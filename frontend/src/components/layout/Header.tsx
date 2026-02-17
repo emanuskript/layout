@@ -18,7 +18,9 @@ import {
   startTourAtom,
   hasEditsAtom,
   effectiveCocoJsonAtom,
+  colorMapAtom,
 } from "@/lib/atoms";
+import { downloadAnnotatedImage } from "@/lib/utils/downloadAnnotatedImage";
 
 export function Header() {
   const fileCount = useAtomValue(fileCountAtom);
@@ -31,6 +33,7 @@ export function Header() {
   const startTour = useSetAtom(startTourAtom);
   const hasEdits = useAtomValue(hasEditsAtom);
   const effectiveCocoJson = useAtomValue(effectiveCocoJsonAtom);
+  const colorMap = useAtomValue(colorMapAtom);
 
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -157,18 +160,30 @@ export function Header() {
                     </a>
                   )}
 
-                  {!isBatch && (
-                    <a
-                      href={apiUrl(`/download/${taskId}/annotated_image`)}
-                      download
-                      onClick={() => setOpen(false)}
-                      className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted"
+                  {!isBatch && effectiveCocoJson && selectedFile?.kind === "image" && (
+                    <button
+                      onClick={() => {
+                        const file = selectedFile?.file;
+                        if (!file) return;
+                        const url = URL.createObjectURL(file);
+                        downloadAnnotatedImage(
+                          url,
+                          effectiveCocoJson,
+                          colorMap,
+                          selectedClassNames,
+                          `annotated_${file.name.replace(/\.[^.]+$/, "")}.jpg`,
+                        );
+                        // Clean up the object URL after a delay to let the image load
+                        setTimeout(() => URL.revokeObjectURL(url), 5000);
+                        setOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-muted"
                     >
                       <svg className="h-4 w-4 text-muted-foreground" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z" />
                       </svg>
-                      Annotated Image
-                    </a>
+                      Annotated Image (JPG)
+                    </button>
                   )}
 
                   {isBatch && (

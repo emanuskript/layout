@@ -7,7 +7,7 @@ router = APIRouter(tags=["classes"])
 
 @router.get("/classes")
 def get_classes():
-    """Return all 25 manuscript element classes with IDs and colors."""
+    """Return all 22 manuscript element classes with IDs and colors."""
     return {
         "classes": [
             {"id": cid, "name": name, "color": CLASS_COLOR_MAP.get(name, "#888888")}

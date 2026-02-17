@@ -129,6 +129,10 @@ export function drawAnnotationsTransformed(
     const isEditing = editingId === ann.id;
     const isSelected = selectedId === ann.id;
     const isHighlighted = highlightedId === ann.id;
+
+    // When editing an annotation, hide all other annotations
+    if (editingId != null && !isEditing) continue;
+
     // Editing annotation gets blue, selected gets a boosted class color
     const color = isEditing ? "#3b82f6" : (colorMap.get(className) || "#888888");
     const currentFill = isEditing
@@ -225,7 +229,8 @@ export type HandleType =
   | "b"
   | "bl"
   | "l"
-  | "move";
+  | "move"
+  | `vertex-${number}-${number}`; // vertex-segIndex-pointIndex
 
 interface HandlePosition {
   type: HandleType;
@@ -306,6 +311,124 @@ export function drawEditHandles(
   }
 }
 
+const VERTEX_SCREEN_RADIUS = 7; // px in screen space
+const TARGET_VERTEX_COUNT = 8; // Number of control handles to display
+
+/** Compute the decimation step for a given segment */
+function getDecimation(segLength: number): number {
+  const totalPoints = segLength / 2;
+  return Math.max(1, Math.floor(totalPoints / TARGET_VERTEX_COUNT));
+}
+
+/**
+ * Hit-test segmentation polygon vertices.
+ * Returns a handle type like 'vertex-0-2' (segIndex-pointIndex) or null.
+ */
+export function hitTestVertex(
+  imageX: number,
+  imageY: number,
+  segmentation: number[][],
+  scale: number,
+): HandleType | null {
+  const radius = VERTEX_SCREEN_RADIUS / scale;
+  for (let si = 0; si < segmentation.length; si++) {
+    const seg = segmentation[si];
+    const decimation = getDecimation(seg.length);
+    for (let pi = 0; pi < seg.length; pi += 2 * decimation) {
+      if (
+        Math.abs(imageX - seg[pi]) <= radius &&
+        Math.abs(imageY - seg[pi + 1]) <= radius
+      ) {
+        return `vertex-${si}-${pi}` as HandleType;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Draw draggable vertex handles on polygon segmentation points.
+ */
+export function drawVertexHandles(
+  ctx: CanvasRenderingContext2D,
+  segmentation: number[][],
+  scale: number,
+) {
+  const r = VERTEX_SCREEN_RADIUS / scale;
+  for (const seg of segmentation) {
+    const decimation = getDecimation(seg.length);
+    for (let i = 0; i < seg.length; i += 2 * decimation) {
+      ctx.beginPath();
+      ctx.arc(seg[i], seg[i + 1], r, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+      ctx.strokeStyle = "#3b82f6";
+      ctx.lineWidth = 1.5 / scale;
+      ctx.stroke();
+    }
+  }
+}
+
+/**
+ * Apply a drag to a segmentation vertex with smooth falloff.
+ * Nearby vertices move proportionally so the shape deforms naturally
+ * instead of creating a spike at the dragged point.
+ * Returns a new segmentation array (immutable).
+ */
+export function applyVertexDrag(
+  segmentation: number[][],
+  handle: HandleType,
+  deltaX: number,
+  deltaY: number,
+): number[][] {
+  const match = (handle as string).match(/^vertex-(\d+)-(\d+)$/);
+  if (!match) return segmentation;
+  const segIdx = parseInt(match[1], 10);
+  const ptIdx = parseInt(match[2], 10);
+
+  return segmentation.map((seg, si) => {
+    if (si !== segIdx) return seg;
+
+    const totalPoints = seg.length / 2;
+    const decimation = getDecimation(seg.length);
+    // Influence radius: half the distance between two displayed handles (in point indices)
+    const influenceRadius = decimation;
+    const dragPointIdx = ptIdx / 2; // Convert flat index to point index
+
+    const newSeg = [...seg];
+    for (let p = 0; p < totalPoints; p++) {
+      // Compute shortest distance on the polygon ring
+      let dist = Math.abs(p - dragPointIdx);
+      dist = Math.min(dist, totalPoints - dist); // wrap around
+
+      if (dist <= influenceRadius) {
+        // Smooth cosine falloff: 1 at center, 0 at edge
+        const t = 1 - dist / influenceRadius;
+        const influence = t * t * (3 - 2 * t); // smoothstep
+        newSeg[p * 2] = seg[p * 2] + deltaX * influence;
+        newSeg[p * 2 + 1] = seg[p * 2 + 1] + deltaY * influence;
+      }
+    }
+    return newSeg;
+  });
+}
+
+/** Recompute bbox from segmentation polygons */
+export function bboxFromSegmentation(
+  segmentation: number[][],
+): [number, number, number, number] {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const seg of segmentation) {
+    for (let i = 0; i < seg.length; i += 2) {
+      minX = Math.min(minX, seg[i]);
+      minY = Math.min(minY, seg[i + 1]);
+      maxX = Math.max(maxX, seg[i]);
+      maxY = Math.max(maxY, seg[i + 1]);
+    }
+  }
+  return [minX, minY, maxX - minX, maxY - minY];
+}
+
 /**
  * Compute new bbox after dragging a handle by (deltaX, deltaY) in image coords.
  * Ensures width/height stay positive (minimum 1px).
@@ -370,8 +493,14 @@ export function applyHandleDrag(
   return [x, y, w, h];
 }
 
+/** Check if a handle type refers to a polygon vertex */
+export function isVertexHandle(handle: HandleType | null): boolean {
+  return typeof handle === "string" && handle.startsWith("vertex-");
+}
+
 /** Map handle type to CSS cursor */
 export function handleCursor(handle: HandleType | null): string {
+  if (isVertexHandle(handle)) return "crosshair";
   switch (handle) {
     case "tl":
     case "br":

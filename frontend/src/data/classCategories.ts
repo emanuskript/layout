@@ -1,5 +1,5 @@
 /**
- * Subcategory groupings and display name mapping for the 25 manuscript
+ * Subcategory groupings and display name mapping for the 22 manuscript
  * element classes, matching the Mergen annotation specification.
  *
  * Backend class names are kept unchanged for model/COCO compatibility.
@@ -43,12 +43,9 @@ export const classCategories: ClassCategory[] = [
     classes: [
       "Border",
       "Illustrations",
-      "GraphicZone",
       "Table",
       "Diagram",
       "Music",
-      "MusicLine",
-      "MusicZone",
     ],
   },
   {

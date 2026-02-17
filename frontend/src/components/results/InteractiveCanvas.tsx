@@ -9,9 +9,14 @@ import {
   hitTestAnnotation,
   HandleType,
   hitTestHandle,
+  hitTestVertex,
   drawEditHandles,
+  drawVertexHandles,
   applyHandleDrag,
+  applyVertexDrag,
+  bboxFromSegmentation,
   handleCursor,
+  isVertexHandle,
 } from "@/lib/utils/annotations";
 
 interface InteractiveCanvasProps {
@@ -23,6 +28,7 @@ interface InteractiveCanvasProps {
   selectedAnnotationId?: number | null;
   editingAnnotationId?: number | null;
   onBboxChange?: (annotationId: number, bbox: [number, number, number, number]) => void;
+  onSegmentationChange?: (annotationId: number, segmentation: number[][], bbox: [number, number, number, number]) => void;
 }
 
 interface Transform {
@@ -40,6 +46,22 @@ function computeFit(cw: number, ch: number, imgW: number, imgH: number): Transfo
   };
 }
 
+/** Point-in-polygon check for segmentation hit testing */
+function pointInPolygonCheck(px: number, py: number, polygon: number[]): boolean {
+  let inside = false;
+  const n = polygon.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = polygon[i * 2];
+    const yi = polygon[i * 2 + 1];
+    const xj = polygon[j * 2];
+    const yj = polygon[j * 2 + 1];
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 export function InteractiveCanvas({
   imageSrc,
   cocoJson,
@@ -49,11 +71,14 @@ export function InteractiveCanvas({
   selectedAnnotationId,
   editingAnnotationId,
   onBboxChange,
+  onSegmentationChange,
 }: InteractiveCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const tRef = useRef<Transform>({ scale: 1, offsetX: 0, offsetY: 0 });
+  const fitToViewRef = useRef<() => void>(() => {});
+  const redrawRef = useRef<(highlightId?: number | null) => void>(() => {});
 
   const [opacity, setOpacity] = useState(0.25);
   const hoveredIdRef = useRef<number | null>(null);
@@ -76,6 +101,7 @@ export function InteractiveCanvas({
     startImageX: number;
     startImageY: number;
     originalBbox: [number, number, number, number];
+    originalSegmentation?: number[][];
     annotationId: number;
   } | null>(null);
 
@@ -144,7 +170,10 @@ export function InteractiveCanvas({
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.translate(t.offsetX, t.offsetY);
         ctx.scale(t.scale, t.scale);
-        drawEditHandles(ctx, editAnn.bbox, t.scale);
+        // Only draw polygon vertex handles (no bbox handles)
+        if (editAnn.segmentation && editAnn.segmentation.length > 0) {
+          drawVertexHandles(ctx, editAnn.segmentation, t.scale);
+        }
         ctx.restore();
       }
     },
@@ -162,40 +191,51 @@ export function InteractiveCanvas({
     redraw(hoveredIdRef.current);
   }, [getImgSize, redraw]);
 
-  // ── Load image ──
+  // Keep refs in sync (avoids stale closures without re-running effects)
+  useEffect(() => { redrawRef.current = redraw; }, [redraw]);
+  useEffect(() => { fitToViewRef.current = fitToView; }, [fitToView]);
+
+  // ── Load image (only when the actual image source changes) ──
   useEffect(() => {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
       imgRef.current = img;
-      catById.current = new Map(cocoJson.categories.map((c) => [c.id, c.name]));
-      // Compute initial fit
       const container = containerRef.current;
       if (container) {
+        const imgW = img.naturalWidth;
+        const imgH = img.naturalHeight;
         const { width: cw, height: ch } = container.getBoundingClientRect();
-        const imgW = cocoJson.images[0]?.width ?? img.naturalWidth;
-        const imgH = cocoJson.images[0]?.height ?? img.naturalHeight;
         tRef.current = computeFit(cw, ch, imgW, imgH);
         setZoomDisplay(Math.round(tRef.current.scale * 100));
       }
-      redraw();
+      redrawRef.current();
     };
     img.src = imageSrc;
-  }, [imageSrc, cocoJson, redraw]);
+  }, [imageSrc]);
+
+  // Update category map when cocoJson changes (don't reload image)
+  useEffect(() => {
+    catById.current = new Map(cocoJson.categories.map((c) => [c.id, c.name]));
+  }, [cocoJson.categories]);
 
   // Redraw on filter / opacity / editing changes
   useEffect(() => {
     redraw(hoveredIdRef.current);
   }, [selectedClasses, opacity, redraw]);
 
-  // Resize observer
+  // Resize observer (stable — uses ref so it doesn't re-mount on data changes)
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const ro = new ResizeObserver(() => fitToView());
+    const ro = new ResizeObserver(() => {
+      if (!editDragRef.current) {
+        fitToViewRef.current();
+      }
+    });
     ro.observe(container);
     return () => ro.disconnect();
-  }, [fitToView]);
+  }, []);
 
   // ── Screen → image coords ──
   const screenToImage = useCallback(
@@ -222,6 +262,9 @@ export function InteractiveCanvas({
     if (!container) return;
 
     const onWheel = (e: WheelEvent) => {
+      // Don't zoom while dragging a vertex or handle
+      if (editDragRef.current) return;
+      
       e.preventDefault();
       const rect = container.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -251,50 +294,86 @@ export function InteractiveCanvas({
     if (e.button !== 0 && e.button !== 1) return;
     e.preventDefault();
 
-    // If editing, check if clicking a handle or inside the bbox
+    // Middle-click always pans (even while editing)
+    if (e.button === 1) {
+      panRef.current = {
+        active: true,
+        dragged: false,
+        startX: e.clientX,
+        startY: e.clientY,
+        origOX: tRef.current.offsetX,
+        origOY: tRef.current.offsetY,
+      };
+      return;
+    }
+
+    // If editing, check if clicking a vertex handle, bbox handle, or inside the annotation
     if (editingAnnotationId != null && e.button === 0) {
       const editAnn = getEditingAnnotation();
       if (editAnn) {
         const coords = screenToImage(e.clientX, e.clientY);
         if (coords) {
-          const handle = hitTestHandle(
-            coords.x,
-            coords.y,
-            editAnn.bbox,
-            tRef.current.scale,
-          );
-          if (handle) {
-            editDragRef.current = {
-              handle,
-              startImageX: coords.x,
-              startImageY: coords.y,
-              originalBbox: [...editAnn.bbox],
-              annotationId: editAnn.id,
-            };
-            return;
+          // 1. Check vertex handles first (polygon points)
+          if (editAnn.segmentation && editAnn.segmentation.length > 0) {
+            const vertexHandle = hitTestVertex(
+              coords.x,
+              coords.y,
+              editAnn.segmentation,
+              tRef.current.scale,
+            );
+            if (vertexHandle) {
+              editDragRef.current = {
+                handle: vertexHandle,
+                startImageX: coords.x,
+                startImageY: coords.y,
+                originalBbox: [...editAnn.bbox],
+                originalSegmentation: editAnn.segmentation.map((s) => [...s]),
+                annotationId: editAnn.id,
+              };
+              return;
+            }
           }
-          // Check if inside the bbox for move
-          const [bx, by, bw, bh] = editAnn.bbox;
-          if (
-            coords.x >= bx &&
-            coords.x <= bx + bw &&
-            coords.y >= by &&
-            coords.y <= by + bh
-          ) {
+
+          // 2. Check if inside the annotation (segmentation or bbox) for move
+          let insideAnnotation = false;
+          if (editAnn.segmentation && editAnn.segmentation.length > 0) {
+            for (const seg of editAnn.segmentation) {
+              if (pointInPolygonCheck(coords.x, coords.y, seg)) {
+                insideAnnotation = true;
+                break;
+              }
+            }
+          }
+          if (!insideAnnotation) {
+            const [bx, by, bw, bh] = editAnn.bbox;
+            if (
+              coords.x >= bx &&
+              coords.x <= bx + bw &&
+              coords.y >= by &&
+              coords.y <= by + bh
+            ) {
+              insideAnnotation = true;
+            }
+          }
+
+          if (insideAnnotation) {
             editDragRef.current = {
               handle: "move",
               startImageX: coords.x,
               startImageY: coords.y,
               originalBbox: [...editAnn.bbox],
+              originalSegmentation: editAnn.segmentation?.map((s) => [...s]),
               annotationId: editAnn.id,
             };
             return;
           }
+          // If we're editing but clicked outside the annotation, allow pan
+          // (don't return here, fall through to pan logic below)
         }
       }
     }
 
-    // Default: start pan
+    // Default: start pan (works at any zoom level, including while editing)
     panRef.current = {
       active: true,
       dragged: false,
@@ -306,15 +385,38 @@ export function InteractiveCanvas({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    // Handle edit drag
+    // Handle edit drag (bbox handle, vertex, or move)
     const ed = editDragRef.current;
     if (ed) {
       const coords = screenToImage(e.clientX, e.clientY);
       if (!coords) return;
       const deltaX = coords.x - ed.startImageX;
       const deltaY = coords.y - ed.startImageY;
-      const newBbox = applyHandleDrag(ed.originalBbox, ed.handle, deltaX, deltaY);
-      onBboxChange?.(ed.annotationId, newBbox);
+
+      if (isVertexHandle(ed.handle)) {
+        // Dragging a single polygon vertex
+        if (ed.originalSegmentation) {
+          const newSeg = applyVertexDrag(ed.originalSegmentation, ed.handle, deltaX, deltaY);
+          const newBbox = bboxFromSegmentation(newSeg);
+          onSegmentationChange?.(ed.annotationId, newSeg, newBbox);
+        }
+      } else if (ed.handle === "move" && ed.originalSegmentation) {
+        // Move the whole annotation (bbox + segmentation)
+        const newBbox = applyHandleDrag(ed.originalBbox, ed.handle, deltaX, deltaY);
+        const newSeg = ed.originalSegmentation.map((seg) => {
+          const moved = new Array(seg.length);
+          for (let i = 0; i < seg.length; i += 2) {
+            moved[i] = seg[i] + deltaX;
+            moved[i + 1] = seg[i + 1] + deltaY;
+          }
+          return moved;
+        });
+        onSegmentationChange?.(ed.annotationId, newSeg, newBbox);
+      } else {
+        // Bbox-only resize/move
+        const newBbox = applyHandleDrag(ed.originalBbox, ed.handle, deltaX, deltaY);
+        onBboxChange?.(ed.annotationId, newBbox);
+      }
       return;
     }
 
@@ -346,25 +448,42 @@ export function InteractiveCanvas({
     if (editingAnnotationId != null) {
       const editAnn = getEditingAnnotation();
       if (editAnn) {
-        const handle = hitTestHandle(
-          coords.x,
-          coords.y,
-          editAnn.bbox,
-          tRef.current.scale,
-        );
-        if (handle) {
-          setCursorStyle(handleCursor(handle));
-          setTooltip(null);
-          return;
+        // Check vertex handles first
+        if (editAnn.segmentation && editAnn.segmentation.length > 0) {
+          const vertexHandle = hitTestVertex(
+            coords.x,
+            coords.y,
+            editAnn.segmentation,
+            tRef.current.scale,
+          );
+          if (vertexHandle) {
+            setCursorStyle(handleCursor(vertexHandle));
+            setTooltip(null);
+            return;
+          }
         }
-        // Inside bbox = move cursor
-        const [bx, by, bw, bh] = editAnn.bbox;
-        if (
-          coords.x >= bx &&
-          coords.x <= bx + bw &&
-          coords.y >= by &&
-          coords.y <= by + bh
-        ) {
+        // Inside annotation (segmentation or bbox) = move cursor
+        let insideAnnotation = false;
+        if (editAnn.segmentation && editAnn.segmentation.length > 0) {
+          for (const seg of editAnn.segmentation) {
+            if (pointInPolygonCheck(coords.x, coords.y, seg)) {
+              insideAnnotation = true;
+              break;
+            }
+          }
+        }
+        if (!insideAnnotation) {
+          const [bx, by, bw, bh] = editAnn.bbox;
+          if (
+            coords.x >= bx &&
+            coords.x <= bx + bw &&
+            coords.y >= by &&
+            coords.y <= by + bh
+          ) {
+            insideAnnotation = true;
+          }
+        }
+        if (insideAnnotation) {
           setCursorStyle("move");
           setTooltip(null);
           return;
@@ -478,11 +597,6 @@ export function InteractiveCanvas({
         >
           Fit
         </button>
-      </div>
-
-      {/* Pan hint */}
-      <div className="absolute right-3 top-3 rounded-md bg-black/40 px-2 py-1 text-[10px] text-white/70 backdrop-blur-sm">
-        Scroll to zoom &middot; Drag to pan &middot; Click annotation to inspect &middot; Double-click to fit
       </div>
 
       {/* Hover tooltip */}

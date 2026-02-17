@@ -10,13 +10,14 @@ catmus_zones_mapping = {
     "GraphicZone": "Illustrations",
     "MarginTextZone": "Gloss",
     "MusicZone": "Music",
+    "MusicLine": "Music",
     "NumberingZone": "Page Number",
     "QuireMarksZone": "Quire Mark",
     "RunningTitleZone": "Running header",
     "TitlePageZone": "Column",
 }
 
-# 25 final classes with COCO category IDs
+# 22 final classes with COCO category IDs
 coco_class_mapping = {
     "Border": 1,
     "Table": 2,
@@ -39,10 +40,7 @@ coco_class_mapping = {
     "Gloss": 19,
     "Illustrations": 20,
     "Column": 21,
-    "GraphicZone": 22,
-    "MusicLine": 23,
-    "MusicZone": 24,
-    "Music": 25,
+    "Music": 22,
 }
 
 FINAL_CLASSES = list(coco_class_mapping.keys())
@@ -77,8 +75,5 @@ CLASS_COLOR_MAP = {
     "Gloss": "#4169E1",
     "Illustrations": "#FF6347",
     "Column": "#2E8B57",
-    "GraphicZone": "#8A2BE2",
-    "MusicLine": "#20B2AA",
-    "MusicZone": "#4682B4",
     "Music": "#1E90FF",
 }

@@ -5,12 +5,16 @@ import { selectedFileAtom } from "./files";
 /** Which annotation is currently being edited (null = not editing) */
 export const editingAnnotationIdAtom = atom<number | null>(null);
 
-/**
- * Overlay edits: fileId → (annotationId → edited bbox).
- * Original annotations are never mutated.
- */
+/**\n * Overlay edits: fileId → (annotationId → edited bbox).\n * Original annotations are never mutated.\n */
 export const annotationEditsAtom = atom<
   Map<string, Map<number, [number, number, number, number]>>
+>(new Map());
+
+/**
+ * Segmentation overlay edits: fileId → (annotationId → edited segmentation).
+ */
+export const segmentationEditsAtom = atom<
+  Map<string, Map<number, number[][]>>
 >(new Map());
 
 /** Apply (or update) a bbox edit for the current file */
@@ -47,11 +51,54 @@ export const resetAnnotationEditAtom = atom(
   ) => {
     const edits = new Map(get(annotationEditsAtom));
     const fileEdits = edits.get(fileId);
-    if (!fileEdits) return;
-    const next = new Map(fileEdits);
-    next.delete(annotationId);
-    edits.set(fileId, next);
+    if (fileEdits) {
+      const next = new Map(fileEdits);
+      next.delete(annotationId);
+      edits.set(fileId, next);
+      set(annotationEditsAtom, edits);
+    }
+    const segEdits = new Map(get(segmentationEditsAtom));
+    const fileSegEdits = segEdits.get(fileId);
+    if (fileSegEdits) {
+      const nextSeg = new Map(fileSegEdits);
+      nextSeg.delete(annotationId);
+      segEdits.set(fileId, nextSeg);
+      set(segmentationEditsAtom, segEdits);
+    }
+  },
+);
+
+/** Apply (or update) a segmentation + bbox edit for the current file */
+export const applySegmentationEditAtom = atom(
+  null,
+  (
+    get,
+    set,
+    {
+      fileId,
+      annotationId,
+      segmentation,
+      bbox,
+    }: {
+      fileId: string;
+      annotationId: number;
+      segmentation: number[][];
+      bbox: [number, number, number, number];
+    },
+  ) => {
+    // Update bbox edits
+    const edits = new Map(get(annotationEditsAtom));
+    const fileEdits = new Map(edits.get(fileId) ?? []);
+    fileEdits.set(annotationId, bbox);
+    edits.set(fileId, fileEdits);
     set(annotationEditsAtom, edits);
+
+    // Update segmentation edits
+    const segEdits = new Map(get(segmentationEditsAtom));
+    const fileSegEdits = new Map(segEdits.get(fileId) ?? []);
+    fileSegEdits.set(annotationId, segmentation);
+    segEdits.set(fileId, fileSegEdits);
+    set(segmentationEditsAtom, segEdits);
   },
 );
 
@@ -62,36 +109,54 @@ export const effectiveCocoJsonAtom = atom<COCOJson | null>((get) => {
   if (!coco || !file) return coco;
 
   const fileEdits = get(annotationEditsAtom).get(file.id);
-  if (!fileEdits || fileEdits.size === 0) return coco;
+  const fileSegEdits = get(segmentationEditsAtom).get(file.id);
+  if ((!fileEdits || fileEdits.size === 0) && (!fileSegEdits || fileSegEdits.size === 0)) return coco;
 
   return {
     ...coco,
     annotations: coco.annotations.map((ann) => {
-      const editedBbox = fileEdits.get(ann.id);
-      if (!editedBbox) return ann;
+      const editedBbox = fileEdits?.get(ann.id);
+      const editedSeg = fileSegEdits?.get(ann.id);
 
-      const [ox, oy, ow, oh] = ann.bbox;
-      const [nx, ny, nw, nh] = editedBbox;
+      if (!editedBbox && !editedSeg) return ann;
 
-      // Transform segmentation vertices to match the new bbox
-      let newSeg = ann.segmentation;
-      if (ann.segmentation?.length && ow > 0 && oh > 0) {
-        newSeg = ann.segmentation.map((seg) => {
-          const t = new Array(seg.length);
-          for (let i = 0; i < seg.length; i += 2) {
-            t[i] = nx + (seg[i] - ox) * (nw / ow);
-            t[i + 1] = ny + (seg[i + 1] - oy) * (nh / oh);
-          }
-          return t;
-        });
+      // If we have a direct segmentation edit, use it as-is
+      if (editedSeg) {
+        const bbox = editedBbox ?? ann.bbox;
+        return {
+          ...ann,
+          bbox,
+          area: bbox[2] * bbox[3],
+          segmentation: editedSeg,
+        };
       }
 
-      return {
-        ...ann,
-        bbox: editedBbox,
-        area: editedBbox[2] * editedBbox[3],
-        segmentation: newSeg,
-      };
+      // Bbox-only edit: transform segmentation to match new bbox
+      if (editedBbox) {
+        const [ox, oy, ow, oh] = ann.bbox;
+        const [nx, ny, nw, nh] = editedBbox;
+
+        let newSeg = ann.segmentation;
+        if (ann.segmentation?.length && ow > 0 && oh > 0) {
+          newSeg = ann.segmentation.map((seg) => {
+            const t = new Array(seg.length);
+            for (let i = 0; i < seg.length; i += 2) {
+              t[i] = nx + (seg[i] - ox) * (nw / ow);
+              t[i + 1] = ny + (seg[i + 1] - oy) * (nh / oh);
+            }
+            return t;
+          });
+        }
+
+        return {
+          ...ann,
+          bbox: editedBbox,
+          area: editedBbox[2] * editedBbox[3],
+          segmentation: newSeg,
+        };
+      }
+
+      return ann;
     }),
   };
 });

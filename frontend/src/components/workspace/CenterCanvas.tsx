@@ -18,6 +18,7 @@ import {
   selectedBatchImageIndexAtom,
   editingAnnotationIdAtom,
   applyBboxEditAtom,
+  applySegmentationEditAtom,
   effectiveCocoJsonAtom,
 } from "@/lib/atoms";
 
@@ -46,6 +47,7 @@ export function CenterCanvas() {
   const editingAnnotationId = useAtomValue(editingAnnotationIdAtom);
   const setEditingAnnotationId = useSetAtom(editingAnnotationIdAtom);
   const applyBboxEdit = useSetAtom(applyBboxEditAtom);
+  const applySegmentationEdit = useSetAtom(applySegmentationEditAtom);
   const effectiveCocoJson = useAtomValue(effectiveCocoJsonAtom);
 
   const [imageSrc, setImageSrc] = useState("");
@@ -103,6 +105,9 @@ export function CenterCanvas() {
           editingAnnotationId={editingAnnotationId}
           onBboxChange={(annotationId, bbox) =>
             applyBboxEdit({ fileId: selectedFile.id, annotationId, bbox })
+          }
+          onSegmentationChange={(annotationId, segmentation, bbox) =>
+            applySegmentationEdit({ fileId: selectedFile.id, annotationId, segmentation, bbox })
           }
         />
       </div>

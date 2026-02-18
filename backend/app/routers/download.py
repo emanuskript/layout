@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.services.file_manager import get_task, get_task_dir
+from app.services.page_xml import coco_to_page_xml
 
 router = APIRouter(tags=["download"])
 
@@ -86,4 +87,42 @@ async def download_results_zip(task_id: str):
         buf,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="results_{task_id}.zip"'},
+    )
+
+
+@router.get("/download/{task_id}/page_xml")
+async def download_page_xml(task_id: str):
+    """Download PAGE XML annotations.
+
+    Single image → one .xml file.
+    Multiple images (batch) → ZIP of .xml files, one per page.
+    """
+    task = get_task(task_id)
+    if task is None or task.coco_json is None:
+        raise HTTPException(status_code=404, detail="Task not found or no results available.")
+
+    images = task.coco_json.get("images", [])
+
+    if len(images) <= 1:
+        # Single image → return one XML
+        xml_str = coco_to_page_xml(task.coco_json)
+        stem = images[0]["file_name"].rsplit(".", 1)[0] if images else "page"
+        return StreamingResponse(
+            io.BytesIO(xml_str.encode("utf-8")),
+            media_type="application/xml",
+            headers={"Content-Disposition": f'attachment; filename="{stem}.xml"'},
+        )
+
+    # Batch → ZIP of per-page XMLs
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for img in images:
+            xml_str = coco_to_page_xml(task.coco_json, image_id=img["id"])
+            xml_name = img["file_name"].rsplit(".", 1)[0] + ".xml"
+            zf.writestr(xml_name, xml_str)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="page_xml_{task_id}.zip"'},
     )

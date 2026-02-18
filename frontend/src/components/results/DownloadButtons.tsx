@@ -11,6 +11,7 @@ import {
   selectedClassNamesAtom,
 } from "@/lib/atoms";
 import { downloadAnnotatedImage } from "@/lib/utils/downloadAnnotatedImage";
+import { downloadPageXml } from "@/lib/utils/cocoToPageXml";
 
 interface DownloadButtonsProps {
   taskId: string;
@@ -37,6 +38,12 @@ export function DownloadButtons({ taskId, isBatch = false }: DownloadButtonsProp
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
+  const handleDownloadPageXml = () => {
+    if (!effectiveCocoJson) return;
+    const stem = selectedFile?.file?.name?.replace(/\.[^.]+$/, "") ?? "page";
+    downloadPageXml(effectiveCocoJson, `${stem}.xml`);
+  };
+
   return (
     <div className="flex flex-wrap gap-2">
       <Button variant="outline" size="sm" asChild>
@@ -44,6 +51,11 @@ export function DownloadButtons({ taskId, isBatch = false }: DownloadButtonsProp
           Download COCO JSON
         </a>
       </Button>
+      {effectiveCocoJson && (
+        <Button variant="outline" size="sm" onClick={handleDownloadPageXml}>
+          Download PAGE XML
+        </Button>
+      )}
       {!isBatch && effectiveCocoJson && (
         <Button variant="outline" size="sm" onClick={handleDownloadImage}>
           Download Annotated Image
